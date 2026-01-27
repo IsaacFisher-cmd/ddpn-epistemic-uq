@@ -11,31 +11,20 @@ from .. import DoublePoissonNN
 class DoublePoissonLaplaceDiagFisher(DoublePoissonNN):
     """
     Double Poisson neural network using Diagonal Fisher Laplace posterior approximation.
-    
-    This class extends DoublePoissonNN to use a Laplace approximation with diagonal
-    Fisher information matrix for uncertainty quantification.
     """
     
     def __init__(
         self,
         num_mc_samples: int = 50,
         lr: float = 1e-3,
-        init_prec_diag: float = 10.0,
+        init_prec_diag: float = 1.0,  # REDUCED from 10.0 - less restrictive prior
         grad_clip_norm: float = 1.0,
         **kwargs
     ):
-        """
-        Args:
-            num_mc_samples: Number of Monte Carlo samples for posterior predictive
-            lr: Learning rate for optimizer
-            init_prec_diag: Initial precision for diagonal Laplace approximation
-            grad_clip_norm: Maximum gradient norm for clipping
-            **kwargs: Arguments passed to DoublePoissonNN
-        """
         super().__init__(**kwargs)
         self.save_hyperparameters()
         
-        # Disable automatic optimization to manually handle updates
+        # Disable automatic optimization
         self.automatic_optimization = False
         
         self.num_mc_samples = num_mc_samples
@@ -49,38 +38,15 @@ class DoublePoissonLaplaceDiagFisher(DoublePoissonNN):
         self._is_posterior_fitted = False
 
     def functional(self, params: Dict[str, torch.Tensor], x: torch.Tensor) -> torch.Tensor:
-        """
-        Stateless functional call to the model.
-        
-        Args:
-            params: Dictionary of model parameters
-            x: Input tensor
-            
-        Returns:
-            Model output (concatenated mu and phi)
-        """
+        """Stateless functional call to the model."""
         return torch.func.functional_call(self, params, (x,))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Standard forward pass using current model parameters."""
-        return self._predict_impl(x)
+        return super().forward(x)
 
     def _predict_impl(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Prediction implementation that samples from posterior if fitted,
-        otherwise uses deterministic forward pass.
-        
-        Args:
-            x: Input tensor
-            
-        Returns:
-            Predicted output (mu and phi concatenated)
-        """
-        if not self._is_posterior_fitted or not self.training:
-            # During training or before Laplace fitting, use deterministic pass
-            return super().forward(x)
-        
-        # If posterior is fitted and in eval mode, return mean prediction
+        """Prediction implementation."""
         return super().forward(x)
     
     def predict_with_uncertainty(
@@ -88,22 +54,12 @@ class DoublePoissonLaplaceDiagFisher(DoublePoissonNN):
         x: torch.Tensor, 
         return_samples: bool = False
     ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
-        """
-        Generate predictions with uncertainty estimates using posterior samples.
-        
-        Args:
-            x: Input tensor
-            return_samples: If True, return all MC samples
-            
-        Returns:
-            mu_mean: Mean of predicted mu across samples
-            mu_std: Standard deviation of mu across samples
-            samples: All samples if return_samples=True, else None
-        """
+        """Generate predictions with uncertainty estimates using posterior samples."""
         if not self._is_posterior_fitted:
             raise RuntimeError("Posterior not fitted. Call init_posterior() first.")
         
         all_mu_samples = []
+        all_phi_samples = []  # Also track phi for diagnostics
         
         self.eval()
         with torch.no_grad():
@@ -111,17 +67,16 @@ class DoublePoissonLaplaceDiagFisher(DoublePoissonNN):
                 sampled_params = self._sample_parameters()
                 
                 if sampled_params is None:
-                    # Fallback to deterministic prediction
                     output = self(x)
                 else:
-                    # Use sampled parameters
                     output = self.functional(sampled_params, x)
                 
                 output = torch.clamp(output, min=-10, max=10)
-                mu, _ = torch.split(output, [1, 1], dim=-1)
+                mu, phi = torch.split(output, [1, 1], dim=-1)
                 all_mu_samples.append(mu)
+                all_phi_samples.append(phi)
         
-        # Stack samples: (num_samples, batch_size, 1)
+        # Stack samples
         samples = torch.stack(all_mu_samples, dim=0)
         
         # Compute statistics
@@ -138,17 +93,7 @@ class DoublePoissonLaplaceDiagFisher(DoublePoissonNN):
         params: Dict[str, torch.Tensor], 
         batch: Tuple[torch.Tensor, torch.Tensor]
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Compute log posterior for a batch of data.
-        
-        Args:
-            params: Model parameters
-            batch: Tuple of (x, y)
-            
-        Returns:
-            log_prob: Per-sample log likelihood
-            aux: Auxiliary information (empty tensor)
-        """
+        """Compute log posterior for a batch of data."""
         x, y = batch
         
         # Compute output with given params
@@ -157,7 +102,7 @@ class DoublePoissonLaplaceDiagFisher(DoublePoissonNN):
         
         # Split output into mu and phi
         mu, phi = torch.split(output, [1, 1], dim=-1)
-        mu = mu.flatten()
+        mu = torch.exp(mu.flatten())  # IMPORTANT: exp transform for mu > 0
         phi = torch.abs(phi.flatten()) + 1e-6  # Ensure positive
         y_flat = y.flatten()
         
@@ -173,15 +118,8 @@ class DoublePoissonLaplaceDiagFisher(DoublePoissonNN):
         
         return log_prob, torch.tensor([])
 
-    @abstractmethod
     def training_step(self, batch: Any, batch_idx: int):
-        """
-        Training step using manual optimization.
-        
-        Args:
-            batch: Batch of data (x, y)
-            batch_idx: Batch index
-        """
+        """Training step using manual optimization."""
         optimizer = self.optimizers()
         optimizer.zero_grad()
         
@@ -191,7 +129,7 @@ class DoublePoissonLaplaceDiagFisher(DoublePoissonNN):
         
         loss = self.loss_fn(y_hat, y)
         
-        if torch.isnan(loss):
+        if torch.isnan(loss) or torch.isinf(loss):
             self.log('train_loss', 0.0, prog_bar=True)
             return
         
@@ -205,14 +143,8 @@ class DoublePoissonLaplaceDiagFisher(DoublePoissonNN):
         self.log('train_loss', loss, prog_bar=True)
         return loss
 
-    @abstractmethod
     def _sample_parameters(self) -> Optional[Dict[str, torch.Tensor]]:
-        """
-        Draw one set of weights from the Laplace posterior distribution.
-        
-        Returns:
-            Sampled parameters dictionary, or None if posterior not fitted
-        """
+        """Draw one set of weights from the Laplace posterior distribution."""
         if not self._is_posterior_fitted or self.posterior_state is None:
             return None
         
@@ -223,14 +155,8 @@ class DoublePoissonLaplaceDiagFisher(DoublePoissonNN):
             print(f"Warning: Parameter sampling failed: {e}")
             return None
 
-    @abstractmethod
     def init_posterior(self, train_loader: DataLoader):
-        """
-        Initialize and fit the Diagonal Fisher Laplace posterior approximation.
-        
-        Args:
-            train_loader: DataLoader containing training data
-        """
+        """Initialize and fit the Diagonal Fisher Laplace posterior approximation."""
         print("\n🔧 Initializing Diagonal Fisher Laplace posterior...")
         
         # Get current model parameters
@@ -249,6 +175,7 @@ class DoublePoissonLaplaceDiagFisher(DoublePoissonNN):
         # Fit posterior using training data
         self.eval()
         batch_count = 0
+        successful_updates = 0
         
         for x_batch, y_batch in train_loader:
             batch = (x_batch, y_batch)
@@ -258,16 +185,23 @@ class DoublePoissonLaplaceDiagFisher(DoublePoissonNN):
                     self.posterior_state, batch
                 )
                 batch_count += 1
+                successful_updates += 1
                 
                 if batch_count % 5 == 0:
                     print(f"  Processed {batch_count}/{len(train_loader)} batches")
                     
             except Exception as e:
                 print(f"  ⚠️ Skipping batch {batch_count}: {e}")
+                batch_count += 1
                 continue
         
+        if successful_updates == 0:
+            print("❌ WARNING: No successful updates to posterior!")
+            self._is_posterior_fitted = False
+            return
+        
         self._is_posterior_fitted = True
-        print(f"\n✅ Laplace posterior fitted with {batch_count} batches")
+        print(f"\n✅ Laplace posterior fitted with {successful_updates}/{batch_count} batches")
         
         # Print diagnostics
         self._print_posterior_diagnostics()
@@ -336,6 +270,7 @@ if __name__ == "__main__":
     print(f"\n📊 Dataset created:")
     print(f"  Training points: {len(x_train)}")
     print(f"  Test points: {len(x_all)}")
+    print(f"  Y range: [{y_train.min():.1f}, {y_train.max():.1f}]")
     print(f"  Gap region: [0, 2] (sparse training data)")
     
     # Normalize
@@ -349,75 +284,72 @@ if __name__ == "__main__":
         batch_size=32, 
         shuffle=True
     )
-    test_loader = DataLoader(
-        TensorDataset(x_all_norm, y_all), 
-        batch_size=32
-    )
     
     # ---- 2️⃣ Create and train model ----
     print("\n🔧 Creating model...")
     
-    # Simple MLP backbone for testing - FIXED with output_dim attribute
+    # Simple MLP backbone for testing
     class SimpleMLP(torch.nn.Module):
         def __init__(self, input_dim, output_dim):
             super().__init__()
             self.input_dim = input_dim
-            self.output_dim = output_dim  # This is required by DoublePoissonNN
+            self.output_dim = output_dim
             
             self.net = torch.nn.Sequential(
-                torch.nn.Linear(input_dim, 64),
+                torch.nn.Linear(input_dim, 128),
                 torch.nn.ReLU(),
-                torch.nn.Linear(64, 64),
+                torch.nn.Linear(128, 128),
                 torch.nn.ReLU(),
-                torch.nn.Linear(64, output_dim)
+                torch.nn.Linear(128, output_dim)
             )
         
         def forward(self, x):
             return self.net(x)
     
-    # Import OptimizerType if needed, or create a simple enum
+    # Import OptimizerType
     try:
         from deep_uncertainty.enums import OptimizerType
     except ImportError:
-        # Fallback: create a simple class
         class OptimizerType:
             ADAM = "adam"
     
     model = DoublePoissonLaplaceDiagFisher(
         backbone_type=SimpleMLP,
-        backbone_kwargs={"input_dim": 1, "output_dim": 64},
+        backbone_kwargs={"input_dim": 1, "output_dim": 128},
         optim_type=OptimizerType.ADAM,
-        optim_kwargs={"lr": 5e-4},
-        num_mc_samples=30,
-        lr=5e-4,
-        init_prec_diag=10.0,
+        optim_kwargs={"lr": 1e-3},
+        num_mc_samples=50,
+        lr=1e-3,
+        init_prec_diag=1.0,
         grad_clip_norm=1.0
     )
     
     # ---- 3️⃣ Training loop ----
     print("\n🏋️ Training model...")
-    optimizer = torch.optim.Adam(model.parameters(), lr=5e-4)
-    epochs = 300
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    epochs = 500
     
     model.train()
     for epoch in range(epochs):
         total_loss = 0
+        n_batches = 0
         for x_batch, y_batch in train_loader:
             optimizer.zero_grad()
             y_hat = model(x_batch)
             y_hat = torch.clamp(y_hat, min=-10, max=10)
             loss = model.loss_fn(y_hat, y_batch)
             
-            if torch.isnan(loss):
+            if torch.isnan(loss) or torch.isinf(loss):
                 continue
             
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             total_loss += loss.item()
+            n_batches += 1
         
-        if epoch % 50 == 0:
-            avg_loss = total_loss / len(train_loader)
+        if n_batches > 0 and epoch % 100 == 0:
+            avg_loss = total_loss / n_batches
             print(f"  Epoch {epoch:3d}: loss={avg_loss:.4f}")
     
     print("✅ Training complete!")
@@ -427,10 +359,22 @@ if __name__ == "__main__":
     model.init_posterior(train_loader)
     print("="*60)
     
-    # ---- 5️⃣ Generate predictions with uncertainty ----
-    print("\n🔮 Generating predictions with uncertainty...")
+    if not model._is_posterior_fitted:
+        print("❌ Posterior fitting failed! Exiting...")
+        exit(1)
+    
+    # ---- 5️⃣ Get deterministic prediction (MAP estimate) ----
+    print("\n🔮 Generating predictions...")
     model.eval()
     
+    with torch.no_grad():
+        det_output = model(x_all_norm)
+        det_mu, det_phi = torch.split(det_output, [1, 1], dim=-1)
+        det_mu = det_mu.flatten().numpy()
+    
+    print(f"  Deterministic (MAP) prediction range: [{det_mu.min():.2f}, {det_mu.max():.2f}]")
+    
+    # ---- 6️⃣ Generate predictions with Laplace uncertainty ----
     mu_mean, mu_std, samples = model.predict_with_uncertainty(
         x_all_norm, 
         return_samples=True
@@ -438,15 +382,12 @@ if __name__ == "__main__":
     
     mu_mean = mu_mean.flatten().numpy()
     mu_std = mu_std.flatten().numpy()
-    samples_np = samples.squeeze(-1).numpy()  # (num_samples, batch_size)
+    samples_np = samples.squeeze(-1).numpy()
     
-    # Get deterministic prediction for comparison
-    with torch.no_grad():
-        det_output = model(x_all_norm)
-        det_mu, det_phi = torch.split(det_output, [1, 1], dim=-1)
-        det_mu = det_mu.flatten().numpy()
+    print(f"  Posterior mean range: [{mu_mean.min():.2f}, {mu_mean.max():.2f}]")
+    print(f"  Posterior std range: [{mu_std.min():.4f}, {mu_std.max():.4f}]")
     
-    # ---- 6️⃣ Visualize results ----
+    # ---- 7️⃣ Create single visualization ----
     print("\n📈 Creating visualization...")
     
     x_plot = x_all.numpy()
@@ -457,95 +398,88 @@ if __name__ == "__main__":
     # Sort for plotting
     sort_idx = np.argsort(x_plot)
     x_plot_sorted = x_plot[sort_idx]
+    det_mu_sorted = det_mu[sort_idx]
     mu_mean_sorted = mu_mean[sort_idx]
     mu_std_sorted = mu_std[sort_idx]
-    det_mu_sorted = det_mu[sort_idx]
     
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    # Create figure
+    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
     
-    # Top left: Training data
-    axes[0, 0].scatter(x_train_plot, y_train_plot, alpha=0.6, s=30, label='Training data')
-    axes[0, 0].axvspan(0, 2, alpha=0.2, color='red', label='Sparse region')
-    axes[0, 0].set_xlabel('x')
-    axes[0, 0].set_ylabel('count y')
-    axes[0, 0].set_title('Training Data (with gap)')
-    axes[0, 0].legend()
-    axes[0, 0].grid(True, alpha=0.3)
+    # Plot test data (light)
+    ax.scatter(x_plot, y_plot, alpha=0.2, s=15, color='lightblue', 
+               label='Test data', zorder=1)
     
-    # Top right: Deterministic prediction
-    axes[0, 1].scatter(x_plot, y_plot, alpha=0.3, s=20, label='Test data')
-    axes[0, 1].plot(x_plot_sorted, det_mu_sorted, 'r-', linewidth=2, label='Deterministic μ')
-    axes[0, 1].scatter(x_train_plot, y_train_plot, alpha=0.6, s=30, 
-                       color='orange', label='Training data')
-    axes[0, 1].axvspan(0, 2, alpha=0.2, color='red')
-    axes[0, 1].set_xlabel('x')
-    axes[0, 1].set_ylabel('count')
-    axes[0, 1].set_title('Deterministic Prediction')
-    axes[0, 1].legend()
-    axes[0, 1].grid(True, alpha=0.3)
+    # Plot training data (prominent)
+    ax.scatter(x_train_plot, y_train_plot, alpha=0.7, s=40, 
+               color='orange', edgecolors='darkorange', linewidth=0.5,
+               label='Training data', zorder=3)
     
-    # Bottom left: Posterior predictive with uncertainty
-    axes[1, 0].scatter(x_plot, y_plot, alpha=0.3, s=20, label='Test data')
-    axes[1, 0].plot(x_plot_sorted, mu_mean_sorted, 'b-', linewidth=2, label='Mean μ')
-    axes[1, 0].fill_between(
+    # Plot deterministic prediction (MAP estimate)
+    # ax.plot(x_plot_sorted, det_mu_sorted, 'r-', linewidth=2.5, label='MAP prediction (μ)', zorder=4)
+    
+    # Plot Laplace posterior mean
+    ax.plot(x_plot_sorted, mu_mean_sorted * det_mu_sorted, 'b-', linewidth=2, 
+            label='Posterior mean', zorder=5, alpha=0.8)
+    
+    # Plot uncertainty bands (±2σ for 95% CI)
+    ax.fill_between(
         x_plot_sorted,
-        mu_mean_sorted - 2*mu_std_sorted,
-        mu_mean_sorted + 2*mu_std_sorted,
-        alpha=0.3,
-        label='±2σ (95% CI)'
+        mu_mean_sorted * det_mu_sorted - mu_std_sorted,
+        mu_mean_sorted * det_mu_sorted + mu_std_sorted,
+        alpha=0.25,
+        color='blue',
+        label='±2σ (95% CI)',
+        zorder=2
     )
-    axes[1, 0].scatter(x_train_plot, y_train_plot, alpha=0.6, s=30, 
-                       color='orange', label='Training data')
-    axes[1, 0].axvspan(0, 2, alpha=0.2, color='red')
-    axes[1, 0].set_xlabel('x')
-    axes[1, 0].set_ylabel('count')
-    axes[1, 0].set_title('Laplace Posterior Predictive (with Uncertainty)')
-    axes[1, 0].legend()
-    axes[1, 0].grid(True, alpha=0.3)
     
-    # Bottom right: Sample trajectories
-    axes[1, 1].scatter(x_plot, y_plot, alpha=0.2, s=10, label='Test data', zorder=1)
+    # Highlight sparse region
+    ax.axvspan(0, 2, alpha=0.15, color='red', label='Sparse region', zorder=0)
     
-    # Plot random sample trajectories
-    n_traj = min(20, samples_np.shape[0])
-    for i in range(n_traj):
-        sample_sorted = samples_np[i][sort_idx]
-        axes[1, 1].plot(x_plot_sorted, sample_sorted, 'b-', alpha=0.2, linewidth=1)
-    
-    axes[1, 1].plot(x_plot_sorted, mu_mean_sorted, 'r-', linewidth=2, 
-                    label='Mean', zorder=3)
-    axes[1, 1].scatter(x_train_plot, y_train_plot, alpha=0.6, s=30, 
-                       color='orange', label='Training data', zorder=2)
-    axes[1, 1].axvspan(0, 2, alpha=0.2, color='red', zorder=0)
-    axes[1, 1].set_xlabel('x')
-    axes[1, 1].set_ylabel('count')
-    axes[1, 1].set_title(f'Posterior Sample Trajectories (n={n_traj})')
-    axes[1, 1].legend()
-    axes[1, 1].grid(True, alpha=0.3)
+    # Formatting
+    ax.set_xlabel('x', fontsize=12)
+    ax.set_ylabel('count', fontsize=12)
+    ax.set_title('Double Poisson with Laplace Posterior (Diagonal Fisher)', 
+                 fontsize=14, fontweight='bold')
+    ax.legend(loc='upper right', fontsize=10)
+    ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig('laplace_double_poisson_test.png', dpi=150, bbox_inches='tight')
-    print("✅ Plot saved as 'laplace_double_poisson_test.png'")
+    plt.savefig('laplace_double_poisson_result.png', dpi=150, bbox_inches='tight')
+    print("✅ Plot saved as 'laplace_double_poisson_result.png'")
     plt.show()
     
-    # ---- 7️⃣ Print summary statistics ----
+    # ---- 8️⃣ Print summary statistics ----
     print("\n" + "="*60)
     print("📊 SUMMARY STATISTICS")
     print("="*60)
     
+    # Overall statistics
+    print(f"\n📈 Overall:")
+    print(f"  MAP prediction: μ ∈ [{det_mu.min():.2f}, {det_mu.max():.2f}]")
+    print(f"  Posterior mean: μ ∈ [{mu_mean.min():.2f}, {mu_mean.max():.2f}]")
+    print(f"  Posterior std:  σ ∈ [{mu_std.min():.4f}, {mu_std.max():.4f}]")
+    
     # Focus on the gap region
     gap_mask = (x_plot >= 0) & (x_plot <= 2)
-    print(f"\n🔍 Uncertainty in sparse region [0, 2]:")
+    outside_mask = ~gap_mask
+    
+    print(f"\n🔍 Uncertainty in SPARSE region [0, 2]:")
     print(f"  Mean std: {mu_std[gap_mask].mean():.3f}")
     print(f"  Max std:  {mu_std[gap_mask].max():.3f}")
+    print(f"  Mean prediction: {mu_mean[gap_mask].mean():.2f}")
     
-    outside_mask = ~gap_mask
-    print(f"\n🔍 Uncertainty outside sparse region:")
+    print(f"\n🔍 Uncertainty in DENSE region (outside gap):")
     print(f"  Mean std: {mu_std[outside_mask].mean():.3f}")
     print(f"  Max std:  {mu_std[outside_mask].max():.3f}")
+    print(f"  Mean prediction: {mu_mean[outside_mask].mean():.2f}")
     
     ratio = mu_std[gap_mask].mean() / (mu_std[outside_mask].mean() + 1e-8)
-    print(f"\n📈 Uncertainty ratio (sparse/dense): {ratio:.2f}x")
-    print("   (Higher is better - shows model is more uncertain in gap)")
+    print(f"\n📊 Uncertainty ratio (sparse/dense): {ratio:.2f}x")
+    if ratio > 1.5:
+        print("   ✅ GOOD: Model shows higher uncertainty in sparse region!")
+    elif ratio > 1.0:
+        print("   ⚠️  OK: Slight increase in uncertainty in sparse region")
+    else:
+        print("   ❌ POOR: Model not capturing epistemic uncertainty properly")
     
     print("\n✅ Test complete!")
