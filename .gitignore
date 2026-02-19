@@ -9,3 +9,6 @@ __pycache__
 chkp/*
 /ignore/
 *.log
+*.ckpt
+*.pth
+checkpoints/

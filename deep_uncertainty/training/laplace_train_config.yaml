@@ -1,0 +1,34 @@
+experiment_name: laplace-test-run
+random_seed: 1998
+head_type: double_poisson_laplace
+dataset:
+  type: tabular
+  spec: ../../ryan_vance/length-of-stay/length_of_stay.npz
+  input_dim: 35
+training:
+  accelerator: cpu
+  batch_size: 32
+  beta_scheduler:
+    type: cosine_annealing
+    kwargs:
+      beta_0: 1.0
+      beta_1: 1.0
+      last_epoch: -1
+  freeze_backbone: False
+  chkp_dir: path/to/chkp/dir
+  chkp_freq: 20
+  num_epochs: 100
+  optimizer:
+    type: adam_w
+    kwargs:
+      lr: 0.001
+      weight_decay: 0.00001
+  lr_scheduler:
+    type: cosine_annealing
+    kwargs:
+      T_max: 100
+      eta_min: 0
+      last_epoch: -1
+evaluation:
+  num_trials: 1
+  log_dir: path/to/log/dir

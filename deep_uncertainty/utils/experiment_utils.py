@@ -26,6 +26,7 @@ from deep_uncertainty.models import LogGaussianNN
 from deep_uncertainty.models import NaturalGaussianNN
 from deep_uncertainty.models import NegBinomNN
 from deep_uncertainty.models import PoissonNN
+from deep_uncertainty.models.bayesian_uq import laplace_nn
 from deep_uncertainty.models.backbones import DistilBert
 from deep_uncertainty.models.backbones import Identity
 from deep_uncertainty.models.backbones import MLP
@@ -51,6 +52,15 @@ def get_model(config: TrainingConfig, return_initializer: bool = False) -> Discr
             )
         else:
             initializer = GaussianNN
+    elif config.head_type == HeadType.DOUBLE_POISSON_LAPLACE:
+        if config.beta_scheduler_type is not None:
+            initializer = partialclass(
+                laplace_nn.DoublePoissonLaplaceDiagFisher,
+                beta_scheduler_type=config.beta_scheduler_type,
+                beta_scheduler_kwargs=config.beta_scheduler_kwargs,
+            )
+        else:
+            initializer = laplace_nn.DoublePoissonLaplaceDiagFisher
     elif config.head_type == HeadType.LOG_GAUSSIAN:
         if config.beta_scheduler_type is not None:
             initializer = partialclass(
