@@ -70,7 +70,10 @@ class TrainingConfig:
         hidden_dim: int = 64,
         precision: str | None = None,
         random_seed: int | None = None,
-        freeze_backbone: bool = False
+        freeze_backbone: bool = False,
+        num_mc_samples: int = 50,
+        init_prec_diag: float = 1.0,
+        grad_clip_norm: float = 1.0,
     ):
         self.experiment_name = experiment_name
         self.accelerator_type = accelerator_type
@@ -96,6 +99,10 @@ class TrainingConfig:
         self.precision = precision
         self.random_seed = random_seed
         self.freeze_backbone = freeze_backbone
+        # Model / Laplace-specific hyperparameters
+        self.num_mc_samples = num_mc_samples
+        self.init_prec_diag = init_prec_diag
+        self.grad_clip_norm = grad_clip_norm
 
     @staticmethod
     def from_yaml(config_path: str | Path) -> TrainingConfig:
@@ -154,6 +161,12 @@ class TrainingConfig:
         random_seed = config_dict.get("random_seed")
         freeze_backbone = config_dict['training'].get("freeze_backbone", False)
 
+        # Model-specific hyperparameters (optional)
+        model_dict = config_dict.get("model", {})
+        num_mc_samples = model_dict.get("num_mc_samples", 50)
+        init_prec_diag = model_dict.get("init_prec_diag", 1.0)
+        grad_clip_norm = model_dict.get("grad_clip_norm", 1.0)
+
         return TrainingConfig(
             experiment_name=experiment_name,
             accelerator_type=accelerator_type,
@@ -179,6 +192,10 @@ class TrainingConfig:
             precision=precision,
             random_seed=random_seed,
             freeze_backbone=freeze_backbone
+            ,
+            num_mc_samples=num_mc_samples,
+            init_prec_diag=init_prec_diag,
+            grad_clip_norm=grad_clip_norm
         )
 
     def to_yaml(self, filepath: str | Path):

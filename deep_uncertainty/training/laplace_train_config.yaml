@@ -1,4 +1,4 @@
-experiment_name: laplace-test-run
+experiment_name: laplace-length-of-stay
 random_seed: 1998
 head_type: double_poisson_laplace
 dataset:
@@ -8,6 +8,7 @@ dataset:
 training:
   accelerator: cpu
   batch_size: 32
+  accumulate_grad_batches: 1
   beta_scheduler:
     type: cosine_annealing
     kwargs:
@@ -17,7 +18,7 @@ training:
   freeze_backbone: False
   chkp_dir: path/to/chkp/dir
   chkp_freq: 20
-  num_epochs: 100
+  num_epochs: 150
   optimizer:
     type: adam_w
     kwargs:
@@ -26,9 +27,14 @@ training:
   lr_scheduler:
     type: cosine_annealing
     kwargs:
-      T_max: 100
+      T_max: 150
       eta_min: 0
       last_epoch: -1
+  precision: 32
+model:
+  num_mc_samples: 50
+  init_prec_diag: 1.0
+  grad_clip_norm: 1.0
 evaluation:
   num_trials: 1
   log_dir: path/to/log/dir

@@ -26,7 +26,7 @@ from deep_uncertainty.models import LogGaussianNN
 from deep_uncertainty.models import NaturalGaussianNN
 from deep_uncertainty.models import NegBinomNN
 from deep_uncertainty.models import PoissonNN
-from deep_uncertainty.models.bayesian_uq import laplace_nn
+from deep_uncertainty.models.bayesian_uq.laplace_nn import DoublePoissonLaplaceDiagFisher
 from deep_uncertainty.models.backbones import DistilBert
 from deep_uncertainty.models.backbones import Identity
 from deep_uncertainty.models.backbones import MLP
@@ -55,12 +55,12 @@ def get_model(config: TrainingConfig, return_initializer: bool = False) -> Discr
     elif config.head_type == HeadType.DOUBLE_POISSON_LAPLACE:
         if config.beta_scheduler_type is not None:
             initializer = partialclass(
-                laplace_nn.DoublePoissonLaplaceDiagFisher,
+                DoublePoissonLaplaceDiagFisher,
                 beta_scheduler_type=config.beta_scheduler_type,
                 beta_scheduler_kwargs=config.beta_scheduler_kwargs,
             )
         else:
-            initializer = laplace_nn.DoublePoissonLaplaceDiagFisher
+            initializer = DoublePoissonLaplaceDiagFisher
     elif config.head_type == HeadType.LOG_GAUSSIAN:
         if config.beta_scheduler_type is not None:
             initializer = partialclass(
@@ -125,7 +125,7 @@ def get_model(config: TrainingConfig, return_initializer: bool = False) -> Discr
     backbone_kwargs["output_dim"] = config.hidden_dim
     backbone_kwargs["freeze_backbone"] = config.freeze_backbone
 
-    model = initializer(
+    model_kwargs = dict(
         backbone_type=backbone_type,
         backbone_kwargs=backbone_kwargs,
         optim_type=config.optim_type,
@@ -133,6 +133,16 @@ def get_model(config: TrainingConfig, return_initializer: bool = False) -> Discr
         lr_scheduler_type=config.lr_scheduler_type,
         lr_scheduler_kwargs=config.lr_scheduler_kwargs,
     )
+
+    # If using Laplace head, forward Laplace-specific hyperparameters
+    if config.head_type == HeadType.DOUBLE_POISSON_LAPLACE:
+        model_kwargs.update(
+            num_mc_samples=getattr(config, "num_mc_samples", 50),
+            init_prec_diag=getattr(config, "init_prec_diag", 1.0),
+            grad_clip_norm=getattr(config, "grad_clip_norm", 1.0),
+        )
+
+    model = initializer(**model_kwargs)
     if return_initializer:
         return model, initializer
     else:
