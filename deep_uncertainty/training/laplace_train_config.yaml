@@ -18,7 +18,7 @@ training:
   freeze_backbone: False
   chkp_dir: path/to/chkp/dir
   chkp_freq: 20
-  num_epochs: 35
+  num_epochs: 50
   optimizer:
     type: adam_w
     kwargs:
@@ -27,7 +27,7 @@ training:
   lr_scheduler:
     type: cosine_annealing
     kwargs:
-      T_max: 35
+      T_max: 50
       eta_min: 0
       last_epoch: -1
   precision: 32
@@ -38,3 +38,6 @@ model:
 evaluation:
   num_trials: 1
   log_dir: path/to/log/dir
+
+
+# python -m deep_uncertainty.evaluation.eval_model   --config-path deep_uncertainty/training/laplace_train_config.yaml   --chkp-path path/to/chkp/dir/laplace_length_of_stay/version_40/best_loss.ckpt   --log-dir path/to/log/dir/laplace_length_of_stay/version_40

@@ -1,0 +1,23 @@
+backbone_kwargs:
+  freeze_backbone: false
+  input_dim: 35
+  output_dim: 64
+backbone_type: !!python/name:deep_uncertainty.models.backbones.MLP ''
+beta_scheduler_kwargs:
+  beta_0: 1.0
+  beta_1: 1.0
+  last_epoch: 40
+beta_scheduler_type: COSINE_ANNEALING
+grad_clip_norm: 1.0
+init_prec_diag: 1.0
+lr: 0.001
+lr_scheduler_kwargs:
+  T_max: 40
+  eta_min: 0
+  last_epoch: -1
+lr_scheduler_type: COSINE_ANNEALING
+num_mc_samples: 50
+optim_kwargs:
+  lr: 0.001
+  weight_decay: 1.0e-05
+optim_type: ADAM_W

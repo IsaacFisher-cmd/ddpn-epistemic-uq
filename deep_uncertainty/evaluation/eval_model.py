@@ -12,6 +12,9 @@ from deep_uncertainty.utils.configs import TrainingConfig
 from deep_uncertainty.utils.experiment_utils import get_datamodule
 from deep_uncertainty.utils.experiment_utils import get_model
 
+import torch
+
+torch.set_float32_matmul_precision("medium")  # or "high", or "low"
 
 def main(log_dir: Path, config_path: Path, chkp_path: Path):
 
