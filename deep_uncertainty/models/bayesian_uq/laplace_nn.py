@@ -17,7 +17,7 @@ class DoublePoissonLaplaceDiagFisher(DoublePoissonNN):
         self,
         num_mc_samples: int = 50,
         lr: float = 1e-3,
-        init_prec_diag: float = 1.0,  # REDUCED from 10.0 - less restrictive prior
+        init_prec_diag: float = 1.0,
         grad_clip_norm: float = 1.0,
         **kwargs
     ):

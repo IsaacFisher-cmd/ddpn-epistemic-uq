@@ -18,7 +18,7 @@ training:
   freeze_backbone: False
   chkp_dir: path/to/chkp/dir
   chkp_freq: 20
-  num_epochs: 150
+  num_epochs: 30
   optimizer:
     type: adam_w
     kwargs:
@@ -27,7 +27,7 @@ training:
   lr_scheduler:
     type: cosine_annealing
     kwargs:
-      T_max: 150
+      T_max: 30
       eta_min: 0
       last_epoch: -1
   precision: 32
