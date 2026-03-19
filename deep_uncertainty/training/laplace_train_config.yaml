@@ -6,7 +6,7 @@ dataset:
   spec: ../../ryan_vance/length-of-stay/length_of_stay.npz
   input_dim: 35
 training:
-  accelerator: cpu
+  accelerator: gpu
   batch_size: 32
   accumulate_grad_batches: 1
   beta_scheduler:
@@ -18,7 +18,7 @@ training:
   freeze_backbone: False
   chkp_dir: path/to/chkp/dir
   chkp_freq: 20
-  num_epochs: 30
+  num_epochs: 35
   optimizer:
     type: adam_w
     kwargs:
@@ -27,7 +27,7 @@ training:
   lr_scheduler:
     type: cosine_annealing
     kwargs:
-      T_max: 30
+      T_max: 35
       eta_min: 0
       last_epoch: -1
   precision: 32
