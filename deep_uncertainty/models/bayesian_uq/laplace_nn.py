@@ -127,6 +127,9 @@ class DoublePoissonLaplaceDiagFisher(DoublePoissonNN):
         y_hat = self(x)
         y_hat = torch.clamp(y_hat, min=-10, max=10)
 
+        if y.dim() == 1:
+            y = y.unsqueeze(-1)
+
         loss = self.loss_fn(y_hat, y)
 
         if torch.isnan(loss) or torch.isinf(loss):
